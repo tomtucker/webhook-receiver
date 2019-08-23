@@ -1,8 +1,9 @@
-import json
+import hmac, hashlib, json, base64
 import os
 from datetime import date, datetime
 import decimal
 import logging
+import hmac
 
 import config 
 from utils import setup_custom_logger, api_return, json_serial
@@ -21,27 +22,30 @@ def vinEvent(event, context):
     logger = logging.getLogger('root')
 
     if config.DEBUG > 3:
-        logger.debug('event: (%s): %s', type(event), event)
+        logger.debug('raw event: (%s): %s', type(event), event)
+
     # Support for serverless -local testing
-    if "resource" in event:
-        # AWS API Gateway Lambda Proxy
-        try:
-            input = json.loads(event['body'])
-            msgSig = event['headers']['X-Webhook-Signature']
-        except Exception as e:
-            logger.exception("Error parsing event: %s", e)
-            return(400, "Error parsing event")
-    else:
-        # Support for serverless invoke local --function functionName
-        # (running code locally by emulating the AWS Lambda environment)
-        input = event
-        msgSig = "TEST"
-    if config.DEBUG > 4:
-        logger.debug('input: (%s): %s', type(input), json.dumps(input))
+    if "resource" not in event:
+        # Support for serverless invoke local --function <functionName> -p <path to JSON input data>
+        # (running code locally by "emulating" the AWS Lambda environment)
+        new_event = {
+            'headers': {
+                "X-Webhook-Signature": base64.b64encode(
+                    hmac.new(
+                        config.HMAC_KEY.encode('utf-8'),
+                        json.dumps(event, separators=(',', ':')).encode('utf-8'),
+                        hashlib.sha256
+                    ).digest()
+                ).decode('utf-8')
+            },
+            'body': json.dumps(event, separators=(',', ':')).encode('utf-8').decode('utf-8')
+        }
+        event = new_event
+        logger.warn("Local mode detected")
+    if config.DEBUG > 3:
+        logger.debug('event: (%s): %s', type(event), event)
 
     # Call the core business logic entry function
-    response = eventManager(input, msgSig)
-
-    if config.DEBUG:
-        logger.debug(json.dumps(response, default=json_serial))
+    response = eventManager(event)
+    logger.debug(json.dumps(response, default=json_serial))
     return response

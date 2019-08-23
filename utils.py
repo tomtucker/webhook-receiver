@@ -52,40 +52,14 @@ def setup_custom_logger(name):
     handler.setFormatter(formatter)
 
     logger = logging.getLogger(name)
-    logger.setLevel(logging.DEBUG)
+    import config
+    if config.DEBUG:
+        logger.setLevel(logging.DEBUG)
+    else:
+        logger.setLevel(logging.INFO)
     logger.addHandler(handler)
     logger.propagate = False
     return logger
-
-# def api_exception(type, isError, message):
-#     """ Helper function to suppress stack trace from caller.
-
-#     Only necessary if NOT using Lambda Proxy integration
-    
-#     Arguments:
-#         type {integer} -- HTTP Status code
-#         isError {bool} -- Error flag
-#         message {string} -- Error message to return to caller
-    
-#     Returns:
-#         string -- Serialized JSON
-#     """
-#     import json
-#     api_exception_obj = {
-#         "type": type,
-#         "isError": isError,
-#         "message": message
-#     }
-#     return json.dumps(api_exception_obj)
-
-# class LambdaException(Exception):
-#     """Simple Exception wrapper
-    
-#     Arguments:
-#         Exception {Exception} -- Exception to catch to suppress stack trace
-#         when not using API Gateway Proxy integration to Lambda function
-#     """
-#     pass
 
 def validate(body: dict, sig: str):
     """validate - Calculate HMAC signature using key and compare to received signature
@@ -99,7 +73,8 @@ def validate(body: dict, sig: str):
     """
     logger = logging.getLogger('root')
     logger.debug("Received signature: %s (%s)", sig, type(sig))
-    logger.debug("body: %s", body)
+    # logger.debug("body: %s", json.dumps(body, separators=(',', ':')).encode('utf-8'))
+    logger.debug("body: (%s) %s", type(body), body)
 
     sig = bytes(sig.encode('utf-8'))
 
@@ -107,7 +82,8 @@ def validate(body: dict, sig: str):
         hmac.new(
             config.HMAC_KEY.encode('utf-8'),
             # The seperators remove the extra JSON whitespace
-            json.dumps(body, separators=(',', ':')).encode('utf-8'),
+            # json.dumps(body, separators=(',', ':')).encode('utf-8'),
+            str(body).encode('utf-8'),
             hashlib.sha256
         ).digest()
     )
@@ -146,13 +122,13 @@ def json_serial(obj):
     logger = logging.getLogger('root')
 
     if isinstance(obj, (datetime, date)):
-        logger.info("json_serial: datetime/date")
+        logger.debug("json_serial: datetime/date")
         return obj.isoformat()
     elif isinstance(obj, (decimal.Decimal)):
-        logger.info("json_serial: decimal")
+        logger.debug("json_serial: decimal")
         return str(obj)
     else:
-        logger.info("json_serial: other")
+        logger.debug("json_serial: other")
     return list(obj)
     # raise TypeError("Type %s not serializable" % type(obj))
 
@@ -218,9 +194,9 @@ def getModificationTx(autobill: dict, event_timestamp: str):
         event_timestamp = config.timezone.localize(
             datetime.strptime(event_timestamp, "%Y-%m-%d %H:%M:%S")
         )
-    except Exception as e:
-        logger.exception(e)
-        return api_return(500, "ERROR Cannot determine search parameters for getModificationTx")
+    except Exception:
+        logger.exception("Error with search parameters for getModificationTx")
+        return api_return("400", "ERROR Cannot determine search parameters for getModificationTx")
 
     # Base Transaction.fetchByAutoBill() method parameters.
     fetchParameters = {
@@ -245,7 +221,7 @@ def getModificationTx(autobill: dict, event_timestamp: str):
                     return transaction
     return None
 
-def getAutoBill(vid: str):
+def getAutoBill(message: dict):
     """getAutoBill - Using SOAP AutoBill.fetchByVid via vinProxy,
             get a specific AutoBill identified its Vindicia identifier.
             Based on the timestamp passed to the function find a Transaction
@@ -253,23 +229,55 @@ def getAutoBill(vid: str):
             'vin:type' that has a value of 'modify'.
     
     Arguments:
-        autobill {str} -- Vindicia identifier for a specific AutoBill object
+        message {dict} -- Triggering Push Message. Use the 'autobillVID' in the
+                          message to fetch the related AutoBill and re-use some
+                          of the notification headers are re-used when storing
+                          the fetched obgject
     
     Returns:
-        dict -- CashBox AutoBill object as dictionary
+        dict -- Always returns a 202 'returnCode' but 'returnString' is dependent
+                on success of operations in this function
     """
 
     logger = logging.getLogger('root')
-    logger.debug("Fetching AutoBill >%s<", vid)
 
     # Base AutoBill.fetchByVid() method parameters.
-    fetchParameters = {
-        'srd': '',
-        'VID': vid
-    }
-    response = vinProxy('AutoBill.fetchByVid', fetchParameters)
+    try:
+        fetchParameters = {
+            'srd': '',
+            'vid': message['content']['autobillVID']
+        }
+        logger.debug("Fetching AutoBill >%s<", fetchParameters['vid'])
+    except Exception:
+        logger.exception("Cannot identify autobillVID")
+        return api_return("202", "Cannot identify related AutoBill")
+
+    # Use SOAP proxy to perform AutoBill.fetchByVid()
+    try:
+        response = vinProxy('AutoBill.fetchByVid', fetchParameters)
+    except Exception:
+        logger.exception("Error with AutoBill.fetchByVid")
+        return api_return("202", "Error fetching related AutoBill")
     # logger.debug("%s", json.dumps(response, default=json_serial, indent=4))
-    return response
+
+    # if AutoBll returned, then
+    #   tweak the 'message' structure
+    #   store the updated message
+    try:
+        merchantAutoBillId = response['autobill']['merchantAutoBillId']
+        message['content'] = json.dumps(response['autobill'], default=json_serial, separators=(',', ':')).encode('utf-8')
+        message['header']['class_name'] = 'autobills'
+        message['header']['event_name'] = 'state change'
+        response = storeMessage(merchantAutoBillId, message)
+        if int(response['statusCode']) == 202:
+            return api_return("202", "OK")
+        else:
+            return api_return("202", response['body'])
+    except Exception:
+        logger.exception("AutoBill not found for message_id >%s<", message['header']['message_id'])
+        return api_return("202", "Related AutoBill not found")
+
+    return api_return("202", "Unreachable code")
 
 def vinProxy(method: str, requestBody: dict) -> xsd.CompoundValue:
     """vinProxy Perform CashBox SOAP API call
@@ -283,7 +291,7 @@ def vinProxy(method: str, requestBody: dict) -> xsd.CompoundValue:
     """
 
     logger = logging.getLogger('root')
-    logger.setLevel(logging.DEBUG)
+    # logger.setLevel(logging.DEBUG)
 
     version = str(config.VIN_VERSION)
     vinClass = method.split(".")[0]
@@ -310,8 +318,8 @@ def vinProxy(method: str, requestBody: dict) -> xsd.CompoundValue:
             plugins=[history],
             transport=myTransport
         )
-    except Exception as e:
-        logger.exception(e)
+    except Exception:
+        logger.exception('Fatal error in vinProxy')
         raise sys.exc_info()[0]
 
     """ Override SOAP service address for Prodtest """
@@ -323,27 +331,28 @@ def vinProxy(method: str, requestBody: dict) -> xsd.CompoundValue:
     try:
         with client.settings(strict=False, xml_huge_tree=True):
             methodResponse = service[vinMethod](**requestBody)
-    except Exception as e:
-        logger.exception('SOAP failure: %s', e)
-        return api_return(502, "Invalid JSON for method")
-
-    logger.info('%s    %s    %s    %s',
-        methodResponse['return']['soapId'],
-        methodResponse['return']['returnCode'],
-        methodResponse['return']['returnString'],
-        vinMethod)
+    except Exception:
+        logger.exception('SOAP API failure')
+        return api_return("400", "SOAP API failure")
 
     """Remove the raw elements from the return (prefixed by '_')"""
     this = helpers.serialize_object(methodResponse)
     if "_raw_elements" in this['return']:
         del this['return']['_raw_elements']
-    if config.DEBUG >= 5:
-        logger.info("this: %s", type(this))
 
-    """ Work around for CashBox SOAP return issue """
+    """ Work around for CashBox SOAP returnString issue """
     from lxml import etree
     x = xmltodict.parse(etree.tostring(history.last_received["envelope"], encoding="UTF-8"))
     this['return']['returnString'] = x['soap:Envelope']['soap:Body'][vinMethod+'Response']['return']['returnString']['#text']
+
+    logger.info('%s    %s    %s    %s',
+        this['return']['soapId'],
+        this['return']['returnCode'],
+        this['return']['returnString'],
+        vinMethod)
+
+    if config.DEBUG >= 4:
+        logger.info("CashBox SOAP API Return: %s\n%s", type(this), this)
 
     return this
 
@@ -362,7 +371,6 @@ def storeMessage(class_id: str, message: dict):
     import boto3
 
     logger = logging.getLogger('root')
-    logger.setLevel(logging.DEBUG)
     logger.debug("Storing message to S3")
 
     # Identify the S3 bucket
@@ -371,9 +379,9 @@ def storeMessage(class_id: str, message: dict):
             's3',
             config.REGION_NAME
             )
-    except Exception as e:
-        logger.exception('Error setting S3 resource:\n%s', e)
-        return api_return("409", "ERROR: Cannot set S3 Bucket")
+    except Exception:
+        logger.exception('Error setting S3 resource')
+        return api_return("409", "ERROR: Storing message")
 
     try:
         # Construct the S3 Item to store
@@ -388,19 +396,18 @@ def storeMessage(class_id: str, message: dict):
             #'notification': json.dumps(message['content']),
             'notification': message['content'],
         }
-    except Exception as e:
-        logger.exception(e)
-        return api_return("410", "ERROR: Error setting message component")
+    except Exception:
+        logger.exception("ERROR: Cannot set message component")
+        return api_return("410", "ERROR: Cannot set message component")
 
     try:
         # Set the S3 bucket and object specifics
-        directory = 'vindicia/' + message['header']['class_name'] + '/'
-        fileName = directory + message['header']['message_id']
-        s3.Bucket(config.BUCKET_NAME).put_object(Key=fileName, Body=json.dumps(Item))
+        path = 'vindicia/' + message['header']['class_name'] + '/' + message['header']['event_name'] + '/'
+        fileName = path + message['header']['message_id']
+        s3.Bucket(config.BUCKET_NAME).put_object(Key=fileName, Body=json.dumps(Item, default=json_serial))
         logger.info("Stored message >%s< into %s/%s", message['header']['message_id'], config.BUCKET_NAME, fileName)
- 
-    except Exception as e:
-        logger.exception(e)
+    except Exception:
+        logger.exception("Error storing message")
         return api_return("411", "Error storing message")
 
     return api_return("202", "OK")

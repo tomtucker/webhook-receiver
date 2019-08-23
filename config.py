@@ -6,9 +6,6 @@ from utils import api_return, setup_custom_logger
 # Set the timezone to match CashBox
 timezone = pytz.timezone("America/Los_Angeles")
 
-# Setup Logging - logging to CloudWatch Log
-logger = setup_custom_logger('root')
-
 # Set global variables from environment
 try:
     HMAC_KEY = os.environ['hmac_key']
@@ -19,6 +16,11 @@ try:
     VIN_VERSION = os.environ['vin_Version']
     USERAGENT = 'eventManager 1.0',
     RETRY_COUNT = 3
-except Exception as e:
-    logger.exception(e)
+except Exception:
+    # No logger has been defined yet so print the traceback and return an error
+    import traceback
+    traceback.print_exc()
     api_return("400", "ERROR: Missing required environment >" + "<")
+
+# Setup Logging - logging to CloudWatch Log
+logger = setup_custom_logger('root')

@@ -8,12 +8,12 @@ import config
 # import hmacValidation as auth
 from utils import *
 
-def eventManager(message: dict, msgSig: str):
+def eventManager(event: dict):
     """eventManager Process a CashBox Push Message
 
     Arguments:
-        message {dict} -- dictionary containing a CashBox Push Notification message
-        msgSig {str} -- Push Notification HMAC signature
+        event {dict} -- dictionary containing a CashBox Push Notification
+                        message and HTTP Headers
 
     Returns:
         dict -- api_return containing a statusCode and message
@@ -22,24 +22,25 @@ def eventManager(message: dict, msgSig: str):
 
     # authentication of message against received HMAC signature
     try:
-        logger.debug("Received signature: %s", msgSig)
-        if (validate(message, msgSig)):
+        # logger.debug("Received signature: %s", msgSig)
+        if (validate(event['body'], event['headers']['X-Webhook-Signature'])):
             pass
         else:
-            logger.exception('Received signature >%s< does not match', msgSig)
+            logger.exception('Received signature >%s< does not match', event['headers']['X-Webhook-Signature'])
             return api_return("403", "Forbidden")
-    except Exception as e:
-        logger.exception('Authentication error: %s', e)
+    except Exception:
+        logger.exception('Signature Validation error:')
         return api_return("403", "Forbidden")
 
     # Set specific message properties from JSON body 'header'
+    message = json.loads(event['body'])
     try:
         class_name = message['header']['class_name']
         event_name = message['header']['event_name']
         message_id = message['header']['message_id']
         event_timestamp = message['header']['event_timestamp']
-    except Exception as e:
-        logger.exception(e)
+    except Exception:
+        logger.exception("Cannot parse message header")
         return api_return("406", "ERROR: Cannot parse message header")
 
     # These are the object IDs expected for each class_name
@@ -50,7 +51,7 @@ def eventManager(message: dict, msgSig: str):
         'adjustments': 'merchantRefundId',
         'autobills': 'merchantAutoBillId',
         'transactions': 'merchantTransactionId',
-        # 'entitlement': 'merchantAutobillId',
+        'entitlement': 'merchantAccountId',
         'invoices': 'invoice_id',
         'payment methods': 'merchantPaymentMethodId'
     }
@@ -59,8 +60,7 @@ def eventManager(message: dict, msgSig: str):
     # 'VID' if the expected class_id is not found
     for key, value in classIds.items():
         if class_name == key:
-            if config.DEBUG:
-                logger.debug("%s/%s. Looking for %s", class_name, event_name, value)
+            logger.debug("%s/%s. Looking for %s", class_name, event_name, value)
 
             # DGD-1786: Handle KeyError for malformed objects missing Merchant
             # class identifiers
@@ -75,8 +75,8 @@ def eventManager(message: dict, msgSig: str):
                         logger.warn("%s/%s: Using \'VID\' instead of %s for : message_id=%s", class_name,
                             event_name, classIds[class_name][1], message_id)
                     break
-                except Exception as e:
-                    logger.exception(e)
+                except Exception:
+                    logger.exception("Cannot set class ID for message_id >%s<", message_id)
                     return api_return("400", "Cannot set class ID for message_id=" + message_id)
             elif class_name == "accounts" and event_name == "data change":
                 # Special handling for accounts/data change messages:
@@ -89,8 +89,8 @@ def eventManager(message: dict, msgSig: str):
                         logger.warn("%s/%s: Using \'VID\' instead of %s: message_id=%s", class_name,
                             event_name, value, message_id)
                     break
-                except Exception as e:
-                    logger.exception(e)
+                except Exception:
+                    logger.exception('Cannot set class ID for message_id >%s<', message_id)
                     return api_return("400", "Cannot set class ID for message_id=" + message_id)
             else:
                 try:
@@ -101,9 +101,17 @@ def eventManager(message: dict, msgSig: str):
                         logger.warn("%s/%s: Using \'VID\' instead of %s for message_id=%s", class_name,
                             event_name, value, message_id)
                     break
-                except Exception as e:
-                    logger.excpetion(e)
-                    return api_return("400", "Cannot set class ID for message_id=" + message_id)
+                except Exception:
+                    logger.excpetion("Cannot set class ID for message_id >%s<", message_id)
+                    return api_return("400", "Cannot set class ID for message")
+
+    # Store the message
+    response = storeMessage(class_id, message)
+
+    if int(response['statusCode']) > 202:
+        # If unsuccessful storing original message, error details
+        # logged and exit with API response set by storeMessage()
+        return response
 
     if class_name == "accounts":
         # If accounts...No change to AutoBill status or billingState
@@ -121,13 +129,6 @@ def eventManager(message: dict, msgSig: str):
         #
         # TODO: Handle refunds triggered by AutoBill.modify()
         # return api_return("200", classIds[class_name][0]+":"+classIds[class_name][1])
-
-        # Store the autobills/modify message
-        response = storeMessage(class_id, message)
-        if int(response['statusCode']) > 202:
-            # If unsuccessful storing original message, error details
-            # logged and API response set by storeMessage()
-            return response
 
         # Get the last modify transaction for this subscription
         transaction = getModificationTx(message['content']['autobill'], event_timestamp)
@@ -154,40 +155,14 @@ def eventManager(message: dict, msgSig: str):
         # If approved Transaction...
         if int(message['content']['autoBillCycle']) == 0:
             # ...and if autobillCycle = 0 (initial billing on subscription)
-            #   AutoBill status changed to 'Active', billingState changed to 'Free/Trial' or 'Good Standing'
-            storeMessage(class_id, message)
-            autobill = getAutoBill(message['content']['autobillVID'])
-            if 'merchantAutoBillId' in autobill:
-                # if AutoBll returned, then
-                #   tweak the 'message' structure
-                #   store the updated message
-                message['content'] = autobill
-                message['header']['class_name'] = 'autobills'
-                message['header']['event_name'] = 'status change'
-                response = storeMessage(class_id, message)
-                return response 
-            else:
-                logger.warn("AutoBill not found for message_id >%s<", message_id)
-                return api_return("202", "AutoBill not found")
-
+            #   AutoBill status changed to 'Active', billingState changed to
+            #   'Free/Trial' or 'Good Standing'
+            return getAutoBill(message)
+            
         elif int(message['content']['retryNumber']) > 0:
             # ...and If retryNumber > 0 (successful retry Transaction)
             #   AutoBill billingState changed to 'Good Standing'
-            storeMessage(class_id, message)
-            autobill = getAutoBill(message['content']['autobillVID'])
-            if 'merchantAutoBillId' in autobill:
-                # if AutoBll returned, then
-                #   tweak the 'message' structure
-                #   store the updated message
-                message['content'] = autobill
-                message['header']['class_name'] = 'autobills'
-                message['header']['event_name'] = 'state change'
-                response = storeMessage(class_id, message)
-                return response 
-            else:
-                logger.warn("AutoBill not found for message_id >%s<", message_id)
-                return api_return("202", "AutoBill not found")
-
+            return getAutoBill(message)
     elif class_name == "transactions" and event_name == "attempt failed":
         # If declined Transaction...
         if (int(message['content']['autoBillCycle']) > 0 and
@@ -206,21 +181,7 @@ def eventManager(message: dict, msgSig: str):
             #
             # So, config.RETRY_COUNT keeps the max retries value and the
             # AutoBill is fetched only on first and last retry decline
-            storeMessage(class_id, message)
-            autobill = getAutoBill(message['content']['autobillVID'])
-            if 'merchantAutoBillId' in autobill:
-                # if AutoBll returned, then
-                #   tweak the 'message' structure
-                #   store the updated message
-                message['content'] = autobill
-                message['header']['class_name'] = 'autobills'
-                message['header']['event_name'] = 'state change'
-                response = storeMessage(class_id, message)
-                return response 
-            else:
-                logger.warn("AutoBill not found for message_id >%s<", message_id)
-                return api_return("202", "AutoBill not found")
-
+            return getAutoBill(message)
     elif class_name == "entitlement":
         # If entitlement...no change to AutoBill status or billingState
         # No other message triggered
@@ -237,5 +198,4 @@ def eventManager(message: dict, msgSig: str):
         pass
 
     # Default return
-    storeMessage(class_id, message)
     return api_return("202", "OK")
