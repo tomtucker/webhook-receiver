@@ -58,9 +58,7 @@ provider:
     vin_Version: '23.0'
     regionName: us-east-1
     s3Bucket: vin.eventmanager
-    cache_bucket: vin.eventmanager
-    cache_key: vin.eventmanager
-    cache_object: vin.eventmanager
+    vinEnv: Prodtest
 
 # you can add packaging information here
 package:

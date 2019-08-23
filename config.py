@@ -16,6 +16,7 @@ try:
     VIN_VERSION = os.environ['vin_Version']
     USERAGENT = 'eventManager 1.0',
     RETRY_COUNT = 3
+    VINENV = os.environ['vinEnv']
 except Exception:
     # No logger has been defined yet so print the traceback and return an error
     import traceback

@@ -322,11 +322,13 @@ def vinProxy(method: str, requestBody: dict) -> xsd.CompoundValue:
         logger.exception('Fatal error in vinProxy')
         raise sys.exc_info()[0]
 
-    """ Override SOAP service address for Prodtest """
-    """ Comment next 3 lines for Production """
-    service = client.create_service(
-        '{http://soap.vindicia.com/v'+version.replace('.','_')+'/'+vinClass+'}'+vinClass+'Binding',
-        'https://soap.prodtest.sj.vindicia.com/soap.pl')
+    if (config.VINENV != 'Production'):
+        # change the SOAP address defined in WSDL if not using CashBox Production
+        service = client.create_service(
+            '{http://soap.vindicia.com/v'+version.replace('.','_')+'/'+vinClass+'}'+vinClass+'Binding',
+            'https://soap.prodtest.sj.vindicia.com/soap.pl')
+    else:
+        service = client.service
 
     try:
         with client.settings(strict=False, xml_huge_tree=True):
