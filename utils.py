@@ -265,7 +265,7 @@ def getAutoBill(message: dict):
     #   store the updated message
     try:
         merchantAutoBillId = response['autobill']['merchantAutoBillId']
-        message['content'] = json.dumps(response['autobill'], default=json_serial, separators=(',', ':')).encode('utf-8')
+        message['content'] = response['autobill']
         message['header']['class_name'] = 'autobills'
         message['header']['event_name'] = 'state change'
         response = storeMessage(merchantAutoBillId, message)
@@ -404,7 +404,9 @@ def storeMessage(class_id: str, message: dict):
 
     try:
         # Set the S3 bucket and object specifics
-        path = 'vindicia/' + message['header']['class_name'] + '/' + message['header']['event_name'] + '/'
+        path = config.timezone.localize(datetime.strptime(
+                message['header']['event_timestamp'], "%Y-%m-%d %H:%M:%S")).strftime("%Y%m%d") \
+            + '/' +message['header']['class_name'] + '/' + message['header']['event_name'] + '/'
         fileName = path + message['header']['message_id']
         s3.Bucket(config.BUCKET_NAME).put_object(Key=fileName, Body=json.dumps(Item, default=json_serial))
         logger.info("Stored message >%s< into %s/%s", message['header']['message_id'], config.BUCKET_NAME, fileName)

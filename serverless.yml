@@ -49,12 +49,9 @@ provider:
 #    variable1: value1
   environment:
     debug: '0'
-    # BBT key
-    hmac_key: 8c3ce0429299c1ce4e713b8dba83036f12b19222
-    api_key: ttucker_soap:OQNwFU71tOOte6bSchHEUn4YgJZS12cz
-    # DTVG Key
-    # hmac_key: cad6d8cec311aa67d8311b4d3de981340613baee
-    # api_key: dtvlatam_soap:5mfV7LELesqZSdfRLmGUc79NZP2XkfLj
+    # CashBox credentials
+    hmac_key: hmac
+    api_key: login:password
     vin_Version: '23.0'
     regionName: us-east-1
     s3Bucket: vin.eventmanager

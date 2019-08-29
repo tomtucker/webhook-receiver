@@ -25,7 +25,7 @@ def vinEvent(event, context):
         logger.debug('raw event: (%s): %s', type(event), event)
 
     # Support for serverless -local testing
-    if "resource" not in event:
+    if "headers" not in event:
         # Support for serverless invoke local --function <functionName> -p <path to JSON input data>
         # (running code locally by "emulating" the AWS Lambda environment)
         new_event = {
