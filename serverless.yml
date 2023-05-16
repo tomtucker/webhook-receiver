@@ -21,7 +21,8 @@ service: eventManager # NOTE: update this with your service name
 
 provider:
   name: aws
-  runtime: python3.7
+  runtime: python3.9
+  lambdaHashingVersion: 20230516  
 
 # you can overwrite defaults here
 #  stage: dev
@@ -48,14 +49,14 @@ provider:
 #  environment:
 #    variable1: value1
   environment:
-    debug: '0'
+    debug: 0
     # CashBox credentials
-    hmac_key: hmac
-    api_key: login:password
-    vin_Version: '23.0'
+    hmac_key: '8c3ce0429299c1ce4e713b8dba83036f12b19222'
+    api_key: 'ttucker_soap:OQNwFU71tOOte6bSchHEUn4YgJZS12cz'
+    vin_Version: '27.0'
     regionName: us-east-1
     s3Bucket: vin.eventmanager
-    vinEnv: Prodtest
+    vinEnv: Staging
 
 # you can add packaging information here
 package:
@@ -66,16 +67,18 @@ package:
 #  exclude:
 #    - exclude-me.py
 #    - exclude-me-dir/**
-  exclude:
-    - .venv/**
-    - .vscode/**
-    - __pycache__/**
-    - node_modules/**
-    - tmp/**
-    - ttt/**
-    - package-lock.json
-    - package.json
-    - requirements.txt
+  patterns:
+    - '!.venv/**'
+    - '!.vscode/**'
+    - '!__pycache__/**'
+    - '!node_modules/**'
+    - '!tmp/**'
+    - '!ttt/**'
+    - '!.project'
+    - '!.pydevproject'
+    - '!package-lock.json'
+    - '!package.json'
+      
 
 functions:
   eventManager:
@@ -135,8 +138,10 @@ functions:
 plugins:
   - serverless-python-requirements
   - serverless-plugin-optimize
+#  - serverless-sam
+#frameworkVersion: ">=1.1.0 <2.0.0"
 custom:
   pythonRequirements:
-    dockerizePip: non-linux
+    dockerizePip: true
   enable_optimize:
     local: false
