@@ -1,3 +1,5 @@
+# "org" ensures this Service is used with the correct Serverless Framework Access Key.
+# org: tomtucker
 # Welcome to Serverless!
 #
 # This file is the main config file for your service.
@@ -11,52 +13,45 @@
 #
 # Happy Coding!
 
-service: eventManager # NOTE: update this with your service name
-#app: your-app-name
+service: vin-webhook # NOTE: update this with your service name
+app: vin-webhook-receiver
 #tenant: your-tenant-name
 
 # You can pin your service to only deploy with a specific Serverless version
 # Check out our docs for more details
 # frameworkVersion: "=X.X.X"
+configValidationMode: error
 
 provider:
   name: aws
   runtime: python3.9
-  lambdaHashingVersion: 20230516  
+  #lambdaHashingVersion: 20201221 
 
 # you can overwrite defaults here
 #  stage: dev
 #  region: us-east-1
 
 # you can add statements to the Lambda function's IAM Role here
-  iamRoleStatements:
-    - Effect: "Allow"
-      Action:
-      - "s3:*"
-      Resource: { "Fn::Join": ["", ["arn:aws:s3:::vin.eventmanager", "/*" ] ] }
-#      Resource: { "Fn::Join" : ["", ["arn:aws:s3:::", { "Ref" : "ServerlessDeploymentBucket" } ] ]  }
-#    - Effect: "Allow"
-#      Action:
-#        - "s3:PutObject"
-#      Resource:
-#        Fn::Join:
-#          - ""
-#          - - "arn:aws:s3:::"
-#            - "Ref" : "ServerlessDeploymentBucket"
-#            - "/*"
+  iam:
+    role:
+      statements:
+      - Effect: "Allow"
+        Action:
+        - "s3:*"
+        Resource: { "Fn::Join": ["", ["arn:aws:s3:::vin.eventmanager", "/*" ] ] }
 
 # you can define service wide environment variables here
 #  environment:
 #    variable1: value1
   environment:
     debug: 0
-    # CashBox credentials
-    hmac_key: '8c3ce0429299c1ce4e713b8dba83036f12b19222'
-    api_key: 'ttucker_soap:OQNwFU71tOOte6bSchHEUn4YgJZS12cz'
-    vin_Version: '27.0'
-    regionName: us-east-1
-    s3Bucket: vin.eventmanager
-    vinEnv: Staging
+    api_env: Staging
+    api_base: 'https://api.staging.vindicia.com'
+    api_version: '27.0'
+    api_key: '<api-username>:<api-password>'
+    hmac_key: '<hmac-key>'
+    region: us-east-1
+    s3bucket: <s3-bucket-name>
 
 # you can add packaging information here
 package:
@@ -81,14 +76,14 @@ package:
       
 
 functions:
-  eventManager:
-    handler: handler.vinEvent
+  receiver:
+    handler: handler.vin_event
 #    The following are a few example events you can configure
 #    NOTE: Please make sure to change your handler code to work with those events
 #    Check the event documentation for details
     events:
       - http:
-         path: eventManager
+         path: event_manager
          method: post
 #      - websocket: $connect
 #      - s3: ${env:BUCKET}
@@ -138,10 +133,9 @@ functions:
 plugins:
   - serverless-python-requirements
   - serverless-plugin-optimize
-#  - serverless-sam
-#frameworkVersion: ">=1.1.0 <2.0.0"
+  - serverless-s3-local
 custom:
   pythonRequirements:
     dockerizePip: true
   enable_optimize:
-    local: false
+    local: false  
